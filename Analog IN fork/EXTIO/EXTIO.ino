@@ -7,7 +7,7 @@
 #define EXIO_ADDRESS 0x65          // Extender address
 #define EXIO_PIN_START 400         // First VPIN
 #define EXIO_DIGITAL_PIN_COUNT 50  // # of pins (digital input)
-#define EXIO_ANALOG_PIN_COUNT 0    // # of pins (analog input)
+#define EXIO_ANALOG_PIN_COUNT 20   // # of pins (analog input)
 #define EXIO_PIN_TABLE_SIZE 50     // which vpin @ which radio (single vpin can have multiple in/out)
 
 #define VERSION_MAJOR 0  // Still a beta thing
@@ -22,6 +22,7 @@
 
 // Config general
 #define LED_PIN 13
+#define RESET_DDC_EX_PIN 6
 
 // Nothing to configure below this
 #define Sbegin(a) (Serial.begin(a))
@@ -89,11 +90,16 @@ struct VPinConfig {
   uint8_t radio;
 };
 
+
 // Global vars
 uint8_t outOP;
 uint8_t _digitalPinStatus[EXIO_DIGITAL_PIN_COUNT];
 uint8_t _digitalPinStatusBytesCount;
 uint8_t *_digitalPinStatusBytes;
+
+uint8_t _analogPinStatusBytesCount = 0;
+uint8_t _analogPinMap[EXIO_ANALOG_PIN_COUNT];
+uint8_t _analogPinStatusBytes[EXIO_ANALOG_PIN_COUNT * 2];
 
 uint8_t _radiosOnline[EEPROM_RADIO_COUNT + 1];
 NRFLite radio;
@@ -103,6 +109,9 @@ uint32_t time;
 
 
 void setup() {
+  pinMode(RESET_DDC_EX_PIN, OUTPUT);
+  digitalWrite(RESET_DDC_EX_PIN, HIGH);
+
   Sbegin(115200);
   Sprintln("--- EXTIO ---");
   Sprintn("Version: ");
@@ -160,8 +169,16 @@ void loop() {
     time = millis();
     step = !step;
   }
+
 }
 
+
+// Reset the commandstation so the correct pin layout can be send
+void resetDCCEX() {
+  digitalWrite(RESET_DDC_EX_PIN, LOW);
+  delay(100);
+  digitalWrite(RESET_DDC_EX_PIN, HIGH);
+}
 
 void processRadioData() {
   uint8_t analogPinMapIndex;
@@ -209,6 +226,19 @@ void processRadioData() {
         if (_radioData.data[2] == PINCONFIG_DIGITAL_OUTPUT) Sprint(" as digital OUT...");
         if (_radioData.data[2] == PINCONFIG_PWM_LED_OUTPUT) Sprint(" as PWM LED OUT...");
         if (_radioData.data[2] == PINCONFIG_PWM_SERVO_OUTPUT) Sprint(" as PWM SERVO OUT...");
+        if (_radioData.data[2] == PINCONFIG_ANALOG_INPUT) 
+        {
+          Sprint(" as analog IN...");
+
+          // if analog IN determine the local index in the _analogPinMap, not the remote index
+
+          _analogPinStatusBytesCount++;
+          _analogPinMap[_analogPinStatusBytesCount] = _radioData.data[1];
+          _radioData.data[0] = _analogPinStatusBytesCount;
+
+          Sprint("NEW AI offset:");
+          Sprintlnn(_radioData.data[1]);
+        }
 
         if (newVPinConfig(_radioData.data[0], _radioData.data[1], _radioData.data[2], _radioData.fromRadioId))
           Sprintln("saved");
@@ -230,6 +260,29 @@ void processRadioData() {
         Sprintlnn(_radioData.data[1]);
 
         _digitalPinStatus[_radioData.data[0]] = _radioData.data[1];
+
+        break;
+
+      case PACKET_UPDATE_ANALOG:
+        analogPinMapIndex = getAnalogPinMapIndex(_radioData.data[0]);
+
+        Sprint("R: (ANALOG) radio ");
+        Sprintn(_radioData.fromRadioId);
+        Sprint(", vpin ");
+        Sprintn(_radioData.data[0] + EXIO_PIN_START);
+
+        if (analogPinMapIndex == 255) {
+          Sprintln(" is not configured as analog IN, ignored...");
+          break;
+        }
+
+        Sprint(" value update ");
+        Sprintn(_analogPinStatusBytes[analogPinMapIndex + 0] + (_analogPinStatusBytes[analogPinMapIndex + 1] << 8));
+        Sprint(" > ");
+        Sprintlnn(_radioData.data[1] + (_radioData.data[2] << 8));
+
+        _analogPinStatusBytes[analogPinMapIndex + 0] = _radioData.data[1];
+        _analogPinStatusBytes[analogPinMapIndex + 1] = _radioData.data[2];
 
         break;
 
@@ -408,6 +461,7 @@ void serialPinConfiguration(uint8_t n) {
   switch (n) {
     case PINCONFIG_DIGITAL_INPUT: Sprint("digital IN"); break;
     case PINCONFIG_DIGITAL_OUTPUT: Sprint("digital OUT"); break;
+    case PINCONFIG_ANALOG_INPUT: Sprint("analog IN"); break;
     case PINCONFIG_PWM_LED_OUTPUT: Sprint("PWM LED OUT"); break;
     case PINCONFIG_PWM_SERVO_OUTPUT: Sprint("PWM SERVO OUT"); break;
     default: Sprint("unknown"); break;
@@ -496,6 +550,34 @@ void clearRadioVPinConfig(uint8_t radio) {
   }
 }
 
+uint8_t getAnalogPinMapIndex(uint8_t offset) {
+  Sprint("AI offset:");
+  Sprintlnn(offset);
+  for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
+  Sprint("VP offset:");
+  Sprintlnn(vPinConfig[i].offset);
+    if (vPinConfig[i].function == PINCONFIG_ANALOG_INPUT && vPinConfig[i].offset == offset)
+      return vPinConfig[i].index;
+  }
+
+  return 255;
+}
+
+
+/*
+uint8_t getVPinStatus(uint8_t offset) {
+  uint8_t state = 0;
+
+  for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
+    if (vPinConfig[i].function == PINCONFIG_DIGITAL_INPUT && vPinConfig[i].offset == offset && vPinConfig[i].state > 0)
+      state = 1;
+  }
+
+  return state;
+}
+*/
+
+
 void receiveData(int numBytes) {
   if (numBytes == 0) {
     return;
@@ -568,7 +650,11 @@ void receiveData(int numBytes) {
         Sprint("I:");
         Sprintn(i);
         Sprint(" P:");
-
+        Sprintn(_analogPinMap[i]);
+        if (_analogPinMap[i] == buffer[1]) {
+          outOP = EXIORDY;
+          Sprintln("READY");
+        }
       }
       break;
 
@@ -634,6 +720,7 @@ void sendData() {
       break;
 
     case EXIOINITA:
+      Wire.write(_analogPinMap, EXIO_ANALOG_PIN_COUNT);
       break;
 
     case EXIORDY:
@@ -651,6 +738,10 @@ void sendData() {
     case EXIORDD:
       Wire.write(_digitalPinStatusBytes, _digitalPinStatusBytesCount);
       //Wire.write(pinStatus, PIN_COUNT);
+      break;
+
+    case EXIORDAN:
+      Wire.write(_analogPinStatusBytes, _analogPinStatusBytesCount);
       break;
   }
 }

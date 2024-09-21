@@ -18,7 +18,6 @@ Input/output for DCC-EX
 
 // TODO: Change for TINY!!
 #define PIN_DCC 2
-#define PIN_LED 13
 #define PIN_RADIO_CE 9
 #define PIN_RADIO_CSN 10
 
@@ -76,9 +75,10 @@ Input/output for DCC-EX
 #define PINCONFIG_NOT_USED 0
 #define PINCONFIG_DIGITAL_INPUT 1
 #define PINCONFIG_DIGITAL_OUTPUT 2
-#define PINCONFIG_PWM_LED_OUTPUT 3
-#define PINCONFIG_PWM_SERVO_OUTPUT 4
-#define PINCONFIG_DCC_OUTPUT 5
+#define PINCONFIG_ANALOG_INPUT 3
+#define PINCONFIG_PWM_LED_OUTPUT 4
+#define PINCONFIG_PWM_SERVO_OUTPUT 5
+#define PINCONFIG_DCC_OUTPUT 6
 
 // Radio packet types
 #define PACKET_EMPTY 0
@@ -91,9 +91,10 @@ Input/output for DCC-EX
 // What to show in the serial monitor besides basic info
 #define SERIAL_SHOW_KEEPALIVE 0b00000001
 #define SERIAL_SHOW_DIGITAL_INPUT 0b00000010
-#define SERIAL_SHOW_DIGITAL_OUTPUT 0b00000100
-#define SERIAL_SHOW_PWM_OUTPUT 0b00001000
-#define SERIAL_SHOW_DCC_OUTPUT 0b00010000
+#define SERIAL_SHOW_ANALOG_INPUT 0b00000100
+#define SERIAL_SHOW_DIGITAL_OUTPUT 0b00001000
+#define SERIAL_SHOW_PWM_OUTPUT 0b00010000
+#define SERIAL_SHOW_DCC_OUTPUT 0b00100000
 
 // Servo timings (SG90)
 #define SERVO_PWM_MIN_DURATION 500
@@ -102,6 +103,10 @@ Input/output for DCC-EX
 // Radio settings
 #define RADIO_CHAN 105
 #define RADIO_EXTIO_ID 0
+
+// Analog input setting
+// Mainly to prevent jitter
+#define ANALOG_IN_UPDATE_BANDWITH 6
 
 // Keep alive messages
 #define KEEPALIVE_COUNT 500000
@@ -243,14 +248,18 @@ uint8_t _radioReady;
 uint32_t _lastSendCount = 0;
 uint8_t _serialOutput;
 uint8_t _hiCount = 0;
-uint32_t _endBlink = 0;
-
 
 NRFLite _radio;
 NmraDcc Dcc;
 RadioPacket _radioData;
 
 void setup() {
+  // resetCVFactoryDefault();
+  pinMode(2, OUTPUT);
+  digitalWrite(2, HIGH);
+  pinMode(3, OUTPUT);
+  digitalWrite(3, LOW);
+
   Sbegin(115200);
   Sprintln("--- TinyIO ---");
   Sprint("Version: ");
@@ -274,11 +283,6 @@ void loop() {
   }
 
   sayHi();
-
-  if (_endBlink && millis() > _endBlink) {
-    digitalWrite(PIN_LED, LOW);
-    _endBlink = 0;
-  }
 }
 
 
@@ -367,19 +371,13 @@ void initDCC() {
   }
 }
 
-void blink(uint16_t duration) {
-  digitalWrite(PIN_LED, HIGH);
-  _endBlink = millis() + duration;
-}
-
 void setPinModes() {
   // TEST PURPOSE
   _pin[0].function = PINCONFIG_PWM_SERVO_OUTPUT;
+  _pin[1].function = PINCONFIG_ANALOG_INPUT;
   _pin[3].function = PINCONFIG_PWM_LED_OUTPUT;
 
   _DccOnlyMode = 1;
-
-  pinMode(PIN_LED, OUTPUT);
 
   for (uint8_t i = 0; i < MAXPINS; i++) {
     if (_pin[i].pin != PINCONFIG_NOT_USED) {
@@ -434,6 +432,15 @@ void printSummary(uint8_t onlyIO) {
           Sprint(_pin[i].address + _offsetVPin);
           Sprint(", ");
           Sprintln("digital wireless IN");
+          break;
+        case PINCONFIG_ANALOG_INPUT:
+          if (_radioReady)
+            Sprint(", vpin: ");
+          else
+            Sprint(", vpin offset: ");
+          Sprint(_pin[i].address + _offsetVPin);
+          Sprint(", ");
+          Sprintln("analog wireless IN");
           break;
         case PINCONFIG_DIGITAL_OUTPUT:
           if (_radioReady)
@@ -580,8 +587,38 @@ void send() {
   _sendIndex++;
   _sendIndex %= MAXPINS;
 
+ // if (!_pin[_sendIndex].pin)
+ //   return;
+
   // Default = nothing happened
   _radioData.message = PACKET_EMPTY;
+
+  // This pin an analog input? Check if the value changed and
+  // if so -> send to EXTIO controller
+  if (_pin[_sendIndex].function == PINCONFIG_ANALOG_INPUT) {
+    _radioData.message = PACKET_UPDATE_ANALOG;
+
+    newState = analogRead(_pin[_sendIndex].pin)+ ANALOG_IN_UPDATE_BANDWITH;
+    if (newState >= _pin[_sendIndex].state && newState <= _pin[_sendIndex].state + (ANALOG_IN_UPDATE_BANDWITH * 2))
+      newState = _pin[_sendIndex].state;
+      else 
+      newState -= ANALOG_IN_UPDATE_BANDWITH;
+
+
+#if not defined(_BE_TINY_)
+    if (newState != _pin[_sendIndex].state && _serialOutput & SERIAL_SHOW_ANALOG_INPUT) {
+      Sprint("S: (ANALOG) pin ");
+      Sprint(_pin[_sendIndex].pin);
+      Sprint(", vpin ");
+      Sprint(_pin[_sendIndex].address + _offsetVPin);
+      Sprint(", value ");
+      Sprint(_pin[_sendIndex].state);
+      Sprint(" > ");
+      Sprint(newState);
+      Sprint("...");
+    }
+#endif
+  }
 
   // This pin a digital input? Check if the value changed and
   // if so -> send to EXTIO controller
@@ -606,10 +643,9 @@ void send() {
   // Set the stored state to the state that was send (so it will retry in
   // the event of send error)
   if (_radioData.message && newState != _pin[_sendIndex].state) {
-    blink(250);
-
     _radioData.data[0] = _pin[_sendIndex].address;
-    _radioData.data[1] = newState;
+    _radioData.data[1] = lowByte(newState);
+    _radioData.data[2] = highByte(newState);
 
     if (_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
       _pin[_sendIndex].state = newState;
@@ -630,8 +666,6 @@ void receive() {
   int16_t delta;
 
   if (!_radio.hasData()) return;
-
-  blink(250);
 
   _radio.readData(&_radioData);
 
@@ -728,8 +762,6 @@ void sayHi() {
 
   _lastSendCount = 0;
 
-  blink(100);
-
   if (!_radioReady) {
     initRadio();
 
@@ -765,8 +797,6 @@ void sayHi() {
 
 // Reset all CV's to factory default
 void resetCVFactoryDefault() {
-  blink(1000);
-
   uint8_t n = sizeof(FactoryDefaultCVs) / sizeof(CVPair);
   Sprintln("I: Factory reset!");
 
