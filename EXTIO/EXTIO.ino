@@ -120,7 +120,7 @@ void setup() {
   Wire.onReceive(receiveData);
   Wire.onRequest(sendData);
 
-  if (!radio.init(RADIO_ID, RADIO_PIN_CE, RADIO_PIN_CSN, NRFLite::BITRATE1MBPS, RADIO_CHAN)) {
+  if (!radio.init(RADIO_ID, RADIO_PIN_CE, RADIO_PIN_CSN, NRFLite::BITRATE250KBPS, RADIO_CHAN)) {
     Sprintln("FATAL: Cannot communicate with radio...");
     death();
   }
@@ -326,7 +326,7 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
 
   String msg;
   String msgCorrected = "";
-  
+
   // Duration on the TinyIO side must fit in a byte (32ms * duration byte)
   if (duration > 80) {
     msgCorrected = " (adjusted from " + String(duration * 100) + "ms to max duration)";
@@ -369,14 +369,14 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
         }
 
         msg += ", duration " + String(duration * 100) + "ms" + msgCorrected + "...";
-        
+
         if (radio.send(vPinConfig[i].radio, &radioData, sizeof(radioData)))
-        
-        msg += "done";
-        
+
+          msg += "done";
+
         else
-        msg += "failed";
-        
+          msg += "failed";
+
         Serial.println(msg);
       } else {
         Sprint("E: radio ");
@@ -475,7 +475,7 @@ uint8_t newVPinConfig(uint8_t remoteIndex, uint8_t offset, uint8_t function, uin
 
   while (1) {
     if (i == EXIO_PIN_TABLE_SIZE) return 0;
-    
+
     if (vPinConfig[i].function == PINCONFIG_NOT_USED) break;
     i++;
   }
@@ -568,7 +568,6 @@ void receiveData(int numBytes) {
         Sprint("I:");
         Sprintn(i);
         Sprint(" P:");
-
       }
       break;
 

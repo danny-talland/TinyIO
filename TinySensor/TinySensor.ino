@@ -38,8 +38,6 @@ Input/output for DCC-EX
 #define PIN_RADIO_CSN 10
 */
 
-#define MAXPINS 4
-
 // Mapping IO internal pin to hardware pin
 #define PIN_IO1 7
 #define PIN_IO2 8
@@ -63,11 +61,11 @@ Input/output for DCC-EX
 // Nothing to configure below this
 
 // Version
-#define TIO_VER "0.9.0"
+#define TS_VER "0.9.0"
 
 // Arduino
 #if defined(__AVR_ATmega328P__)
-//#define MAXPINS 16
+#define MAXPINS 16
 
 #define PIN_LED 13
 #define PIN_RADIO_CE 9
@@ -81,7 +79,7 @@ Input/output for DCC-EX
 // ATTINY
 #if defined(__AVR_ATtiny84__) || (__AVR_ATtiny85__) || (SERIAL)
 #define _BE_TINY_
-//#define MAXPINS 8
+#define MAXPINS 8
 
 #define Sbegin(a)
 #define Sprintln(a)
@@ -117,16 +115,12 @@ Input/output for DCC-EX
 #define SERIAL_SHOW_PWM_OUTPUT 0b00001000
 #define SERIAL_SHOW_DCC_OUTPUT 0b00010000
 
-// Servo timings (SG90)
-#define SERVO_PWM_MIN_DURATION 500
-#define SERVO_PWM_MAX_DURATION 2400
-
 // Radio settings
 #define RADIO_CHAN 105
 #define RADIO_EXTIO_ID 0
 
 // Keep alive messages
-#define KEEPALIVE_COUNT 100000
+#define KEEPALIVE_COUNT 500000
 
 // CV indexes and default values
 #define CV_DCC_ADDRESS_DEFAULT 9
@@ -134,8 +128,6 @@ Input/output for DCC-EX
 #define CV_RADIO_ID_DEFAULT 0
 #define CV_PIN_ADDRESS_BASE 40
 #define CV_PIN_ADDRESS_FIRST STD_VPIN_BASE
-#define CV_PIN_FUNCTION_BASE 60
-#define CV_PIN_FUNCTION_DEFAULT STD_PIN_FUNCTION
 #define CV_SERIAL_OUTPUT 99
 #define CV_SERIAL_OUTPUT_DEFAULT 0b11111111
 #define CV_DECODER_MASTER_RESET 120
@@ -210,27 +202,6 @@ CVPair FactoryDefaultCVs[] = {
   { CV_PIN_ADDRESS_BASE + 15, CV_PIN_ADDRESS_FIRST + 15 },
 #endif
 
-  // Defines what function PIN_IO1 - PIN_IO16 should have
-  { CV_PIN_FUNCTION_BASE, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 1, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 2, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 3, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 4, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 5, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 6, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 7, CV_PIN_FUNCTION_DEFAULT },
-
-#if not defined(_BE_TINY_)
-  { CV_PIN_FUNCTION_BASE + 8, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 9, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 10, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 11, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 12, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 13, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 14, CV_PIN_FUNCTION_DEFAULT },
-  { CV_PIN_FUNCTION_BASE + 15, CV_PIN_FUNCTION_DEFAULT },
-#endif
-
   { CV_DECODER_MASTER_RESET, 0 },
 
 };
@@ -280,9 +251,9 @@ void setup() {
   blink(5000);
 
   Sbegin(115200);
-  Sprintln("--- TinyIO ---");
+  Sprintln("--- TinySensor ---");
   Sprint("Version: ");
-  Sprintln(TIO_VER);
+  Sprintln(TS_VER);
 
   initDCC();
   setPinModes();
@@ -294,79 +265,12 @@ void loop() {
   // Do all DCC stuff in library
   Dcc.process();
 
-  // Send & receive data
-  if (!_DccOnlyMode && _radioReady) {
-    send();
-    receive();
-    pwm();
-  }
-
-  sayHi();
+  // Send data
+  send();
 
   if (_endBlink && millis() > _endBlink) {
     digitalWrite(PIN_LED, LOW);
     _endBlink = 0;
-  }
-}
-
-
-void pwm() {
-  uint16_t passed;
-  uint8_t multiplier;
-
-  _pwmIndex++;
-  _pwmIndex %= MAXPINS;
-
-  if (!_pin[_pwmIndex].duration) return;
-
-  passed = millis() - _pin[_pwmIndex].lastUpdate;
-
-  multiplier = passed >> 5;
-
-  while (multiplier) {
-    _pin[_pwmIndex].tempState += _pin[_pwmIndex].step;
-
-    if (_pin[_pwmIndex].duration)
-      _pin[_pwmIndex].duration--;
-
-    multiplier--;
-
-    if (!multiplier) {
-      _pin[_pwmIndex].lastUpdate = millis();
-
-      if (_pin[_pwmIndex].function == PINCONFIG_PWM_LED_OUTPUT) {
-        // This is a LED PWM, output direct analog value
-        _pin[_pwmIndex].state = _pin[_pwmIndex].tempState >> 8;
-        analogWrite(_pin[_pwmIndex].pin, _pin[_pwmIndex].state);
-      } else {
-        // This is a SERVO PWM, output a high pulse
-        _pin[_pwmIndex].state = _pin[_pwmIndex].tempState >> 3;
-        digitalWrite(_pin[_pwmIndex].pin, HIGH);
-        delayMicroseconds(_pin[_pwmIndex].state);
-        digitalWrite(_pin[_pwmIndex].pin, LOW);
-      }
-
-      if (!_pin[_pwmIndex].duration) {
-        _pin[_pwmIndex].state = _pin[_pwmIndex].endValue;
-
-#if not defined(_BE_TINY_)
-        if (_serialOutput & SERIAL_SHOW_PWM_OUTPUT) {
-          if (_pin[_pwmIndex].function == PINCONFIG_PWM_LED_OUTPUT)
-            Sprint("I: (LED) pin ");
-          else
-            Sprint("I: (SERVO) pin ");
-          Sprint(_pin[_pwmIndex].pin);
-          Sprint(", vpin ");
-          Sprint(_pin[_pwmIndex].address + _offsetVPin);
-          Sprint(", value update to ");
-          Sprint(_pin[_pwmIndex].state);
-          Sprint(" done in ");
-          Sprint(millis() - _pin[_pwmIndex].startTime);
-          Sprintln("ms");
-        }
-#endif
-      }
-    }
   }
 }
 
@@ -391,7 +295,7 @@ void initDCC() {
   // Get the pin config
   for (uint8_t i = 0; i < MAXPINS; i++) {
     _pin[i].address = Dcc.getCV(CV_PIN_ADDRESS_BASE + i);
-    _pin[i].function = Dcc.getCV(CV_PIN_FUNCTION_BASE + i);
+    _pin[i].function = PINCONFIG_DIGITAL_INPUT;
   }
 }
 
@@ -401,22 +305,9 @@ void blink(uint16_t duration) {
 }
 
 void setPinModes() {
-  // TEST PURPOSE
-  //_pin[0].function = PINCONFIG_PWM_SERVO_OUTPUT;
-  //_pin[3].function = PINCONFIG_PWM_LED_OUTPUT;
-
-  _DccOnlyMode = 1;
-
   for (uint8_t i = 0; i < MAXPINS; i++) {
     if (_pin[i].pin != PINCONFIG_NOT_USED) {
-      pinMode(_pin[i].pin, OUTPUT);
-
-      if (_pin[i].function == PINCONFIG_DIGITAL_INPUT)
-        pinMode(_pin[i].pin, INPUT_PULLUP);
-
-      if (_pin[i].function != PINCONFIG_DCC_OUTPUT) {
-        _DccOnlyMode = 0;
-      }
+      pinMode(_pin[i].pin, INPUT_PULLUP);
     }
   }
 }
@@ -503,19 +394,9 @@ void printSummary(uint8_t onlyIO) {
 #endif
 }
 
-uint8_t doSend() {
-  for (uint8_t i = 0; i < 100; i++)
-    if (_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData)))
-      return 1;
-
-  return 0;
-}
-
 
 // Init radio and get the basic info from the EXTIO controller
 uint8_t initRadio() {
-  // Only DCC?
-  if (_DccOnlyMode) return;
 
   Sprintln("I: Init radio:");
 
@@ -534,8 +415,7 @@ uint8_t initRadio() {
 
   Sprint("S: Requesting radio id and vpin offset...");
 
-  //if (!_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
-  if (!doSend()) {
+  if (!_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
     Sprintln("failed (offline)");
     return 0;
   }
@@ -610,7 +490,6 @@ uint8_t initRadio() {
 void send() {
   uint16_t newState;
   uint16_t state = 0;
-  uint8_t tmpState2;
 
   // Check 1 pin each "loop"
   _sendIndex++;
@@ -659,143 +538,12 @@ void send() {
   }
 }
 
-// Process packets received from the EXTIO controller
-void receive() {
-  uint8_t ppin;
-  uint8_t ipin;
-  int16_t delta;
-
-  if (!_radio.hasData()) return;
-
-  blink(250);
-
-  _radio.readData(&_radioData);
-
-  ipin = _radioData.data[0];
-  ppin = _pin[ipin].pin;
-
-  switch (_radioData.message) {
-#if not defined(_BE_TINY_)
-    case PACKET_JUST_SAY_HI:
-      if (_serialOutput & SERIAL_SHOW_KEEPALIVE) {
-        Sprint("R: EXTIO says hi! (");
-        Sprint(_radioData.data[0]);
-        Sprintln(")");
-      }
-      break;
-#endif
-
-    case PACKET_INIT:
-      Sprintln("R: EXTIO asked for re-init");
-      initRadio();
-      break;
-
-    case PACKET_UPDATE_DIGITAL:
-      digitalWrite(ppin, _radioData.data[1]);
-
-#if not defined(_BE_TINY_)
-      if (_serialOutput & SERIAL_SHOW_DIGITAL_OUTPUT) {
-        Sprint("R: (DIGITAL) pin ");
-        Sprint(ppin);
-        Sprint(", vpin ");
-        Sprint(_pin[ipin].address + _offsetVPin);
-        Sprint(", state ");
-        serialHighOrLow(_radioData.data[1]);
-        Sprintln();
-      }
-#endif
-
-      break;
-
-    case PACKET_UPDATE_ANALOG:
-      _pin[ipin].endValue = _radioData.data[1] + (_radioData.data[3] << 8);
-      // Duration in 32ms parts!
-      _pin[ipin].duration = _radioData.data[2];
-
-      delta = (_pin[ipin].endValue - _pin[ipin].state) << 3;
-      _pin[ipin].tempState = _pin[ipin].state << 3;
-
-      if (_pin[ipin].function == PINCONFIG_PWM_LED_OUTPUT) {
-        delta = delta << 3;
-        _pin[ipin].tempState = _pin[ipin].tempState << 3;
-      }
-
-      _pin[ipin].step = delta / _pin[ipin].duration;
-      _pin[ipin].lastUpdate = millis();
-
-#if not defined(_BE_TINY_)
-      if (_serialOutput & SERIAL_SHOW_PWM_OUTPUT) {
-        // Only keep track of time on serial enabled devices
-        _pin[ipin].startTime = _pin[ipin].lastUpdate;
-
-        if (_pin[ipin].function == PINCONFIG_PWM_LED_OUTPUT)
-          Sprint("R: (LED) pin ");
-        else
-          Sprint("R: (SERVO) pin ");
-
-        Sprint(ppin);
-        Sprint(", vpin ");
-        Sprint(_pin[ipin].address + _offsetVPin);
-        Sprint(", value update ");
-        Sprint(_pin[ipin].state);
-        Sprint(" > ");
-        Sprint(_pin[ipin].endValue);
-        Sprint(" in ");
-        Sprint(_pin[ipin].duration * 32);
-        Sprintln("ms...");
-      }
-#endif
-      break;
-  }
-}
-
-
 // Print "HIGH" or "LOW" for 1 / 0
 void serialHighOrLow(uint8_t n) {
   if (n)
     Serial.print("HIGH");
   else
     Serial.print("LOW");
-}
-
-// Sort of keepalive, if fails it will try to re-init
-void sayHi() {
-  if (_lastSendCount++ < KEEPALIVE_COUNT) return;
-
-  _lastSendCount = 0;
-
-  blink(100);
-
-  if (!_radioReady) {
-    initRadio();
-
-    if (_radioReady) printSummary(1);
-
-    return;
-  }
-
-  _radioData.message = PACKET_JUST_SAY_HI;
-  _radioData.data[0] = _hiCount++;
-
-#if not defined(_BE_TINY_)
-  if (_serialOutput & SERIAL_SHOW_KEEPALIVE) {
-    Sprint("S: Saying hi to EXTIO (");
-    Sprint(_radioData.data[0]);
-    Sprint(")...");
-  }
-#endif
-
-  if (!_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData)) && !_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
-    _radioReady = 0;
-
-#if not defined(_BE_TINY_)
-    if (_serialOutput & SERIAL_SHOW_KEEPALIVE)
-      Sprintln("failed, set Radio to NOT ready");
-  } else {
-    if (_serialOutput & SERIAL_SHOW_KEEPALIVE)
-      Sprintln("done");
-#endif
-  }
 }
 
 
