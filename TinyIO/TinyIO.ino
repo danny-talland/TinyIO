@@ -15,9 +15,20 @@ Input/output for DCC-EX
 // Uncomment to ignore all serial comms
 //#define NO_SERIAL
 
+// Uncomment for no led signal
+// #define NO_LED
+
+// Uncomment to set pinmodes without programming
+// IO1 : PWM LED
+// IO2 : Digital OUT
+// IO3 : Digital IN
+// IO4 : PWM SERVO
+#define TEST_MODE
+
 // Base address (0..255), the offset for the first input after a Factory Reset. The consecutive
 // pins are numbered +1. This offset is added to 'EXIO_PIN_START' in the EXTIO controller to calculate
-// the vpin number. Note: 'EXIO_PIN_START' + 'EXIO_DIGITAL_PIN_COUNT' is the highest vpin number!
+// the vpin number. 
+// Note: 'EXIO_PIN_START' + 'EXIO_DIGITAL_PIN_COUNT' is the highest vpin number!
 // Note 2: if using DCC outputs all addresses from 0 to 255 will be valid.
 #define STD_VPIN_BASE 0
 
@@ -126,7 +137,7 @@ Input/output for DCC-EX
 #define RADIO_EXTIO_ID 0
 
 // Keep alive messages
-#define KEEPALIVE_COUNT 100000
+#define KEEPALIVE_COUNT 300000
 
 // CV indexes and default values
 #define CV_DCC_ADDRESS_DEFAULT 9
@@ -274,9 +285,12 @@ NmraDcc Dcc;
 RadioPacket _radioData;
 
 void setup() {
-  resetCVFactoryDefault();
+  // resetCVFactoryDefault();
 
+#if not defined(NO_LED)
   pinMode(PIN_LED, OUTPUT);
+#endif
+
   blink(5000);
 
   Sbegin(115200);
@@ -383,6 +397,9 @@ void initDCC() {
   // Some settings can be put directly into the radioData
   _radioData.fromRadioId = Dcc.getCV(CV_RADIO_ID);
 
+Sprintln("RADIOID");
+  Sprintln(_radioData.fromRadioId);
+
 // What kind of info to print to the serial monitor
 #if not defined(_BE_TINY_)
   _serialOutput = Dcc.getCV(CV_SERIAL_OUTPUT);
@@ -396,14 +413,18 @@ void initDCC() {
 }
 
 void blink(uint16_t duration) {
+#if not defined(NO_LED)
   digitalWrite(PIN_LED, HIGH);
   _endBlink = millis() + duration;
+#endif
 }
 
 void setPinModes() {
-  // TEST PURPOSE
-  //_pin[0].function = PINCONFIG_PWM_SERVO_OUTPUT;
-  //_pin[3].function = PINCONFIG_PWM_LED_OUTPUT;
+#if defined(TEST_MODE)
+  _pin[0].function = PINCONFIG_PWM_LED_OUTPUT;
+  _pin[1].function = PINCONFIG_DIGITAL_OUTPUT;
+  _pin[3].function = PINCONFIG_PWM_SERVO_OUTPUT;
+#endif
 
   _DccOnlyMode = 1;
 
@@ -503,15 +524,6 @@ void printSummary(uint8_t onlyIO) {
 #endif
 }
 
-uint8_t doSend() {
-  for (uint8_t i = 0; i < 100; i++)
-    if (_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData)))
-      return 1;
-
-  return 0;
-}
-
-
 // Init radio and get the basic info from the EXTIO controller
 uint8_t initRadio() {
   // Only DCC?
@@ -534,8 +546,8 @@ uint8_t initRadio() {
 
   Sprint("S: Requesting radio id and vpin offset...");
 
-  //if (!_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
-  if (!doSend()) {
+  if (!_radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData))) {
+
     Sprintln("failed (offline)");
     return 0;
   }
@@ -562,6 +574,8 @@ uint8_t initRadio() {
       ;
     Dcc.setCV(CV_RADIO_ID, _radioData.data[0]);
 
+    Sprintln("ID");
+    Sprintln(Dcc.getCV(CV_RADIO_ID));
     _radioData.fromRadioId = _radioData.data[0];
     _offsetVPin = _radioData.data[1] + (_radioData.data[2] << 8);
   } else {

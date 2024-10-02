@@ -15,10 +15,11 @@
 #define VERSION_PATCH 0
 
 // Config radio
-#define RADIO_ID 0        // Radio address (0..125)
-#define RADIO_CHAN 105    // Radio channel (0..125)
-#define RADIO_PIN_CE 9    // Radio CE pin
-#define RADIO_PIN_CSN 10  // Radui CSN pin
+#define RADIO_ID 0          // Radio address (0..125)
+#define RADIO_CHAN 105      // Radio channel (0..125)
+#define RADIO_PIN_CE 9      // Radio CE pin
+#define RADIO_PIN_CSN 10    // Radi0 CSN pin
+#define RADIO_SEND_TRIES 10 // NUmber of times radio tries to send
 
 // Config general
 #define LED_PIN 13
@@ -69,6 +70,7 @@
 #define PACKET_UPDATE_DIGITAL 3
 #define PACKET_UPDATE_ANALOG 4
 #define PACKET_JUST_SAY_HI 99
+#define PACKET_ACK 222
 
 // Servo PWM length (SG90)
 #define SERVO_PWM_MIN_DURATION 500
@@ -96,10 +98,10 @@ uint8_t _digitalPinStatusBytesCount;
 uint8_t *_digitalPinStatusBytes;
 
 uint8_t _radiosOnline[EEPROM_RADIO_COUNT + 1];
-NRFLite radio;
+NRFLite _radio;
 RadioPacket _radioData;
-VPinConfig vPinConfig[EXIO_PIN_TABLE_SIZE];
-uint32_t time;
+VPinConfig _vPinConfig[EXIO_PIN_TABLE_SIZE];
+uint32_t _time;
 
 
 void setup() {
@@ -120,12 +122,12 @@ void setup() {
   Wire.onReceive(receiveData);
   Wire.onRequest(sendData);
 
-  if (!radio.init(RADIO_ID, RADIO_PIN_CE, RADIO_PIN_CSN, NRFLite::BITRATE250KBPS, RADIO_CHAN)) {
-    Sprintln("FATAL: Cannot communicate with radio...");
+  if (!_radio.init(RADIO_ID, RADIO_PIN_CE, RADIO_PIN_CSN, NRFLite::BITRATE250KBPS, RADIO_CHAN)) {
+    Sprintln("FATAL: Cannot communicate with _radio...");
     death();
   }
 
-  time = millis();
+  _time = millis();
 }
 
 uint8_t step = 0;
@@ -134,13 +136,15 @@ uint8_t step = 0;
 void loop() {
   processRadioData();
 
-  if (time + 15000 < millis()) {
+  if (_time + 15000 < millis()) {
     if (step) {
-      //   sendPWMOutput(0, 40, 20);
-      // sendPWMOutput(3, 255, 50);
+         sendPWMOutput(3, 40, 20);
+      sendPWMOutput(0, 255, 50);
+      sendDigitalOutput(1, HIGH);
     } else {
-
-      //sendPWMOutput(3, 0, 30);
+sendPWMOutput(0, 0, 30);
+sendDigitalOutput(1, LOW);
+      sendPWMOutput(3, 130, 70);
       /*
       sendPWMOutput(0, 40, 0);
       delay(500);
@@ -157,17 +161,26 @@ void loop() {
       */
     }
 
-    time = millis();
+    _time = millis();
     step = !step;
   }
+}
+
+uint8_t radioSend(uint8_t toRadioId, void *data) {
+  for (uint8_t i = 0; i < RADIO_SEND_TRIES; i++){
+    if (_radio.send(toRadioId, data, sizeof(_radioData)))
+      return 1;
+  }
+
+  return 0;
 }
 
 
 void processRadioData() {
   uint8_t analogPinMapIndex;
 
-  while (radio.hasData()) {
-    radio.readData(&_radioData);
+  while (_radio.hasData()) {
+    _radio.readData(&_radioData);
 
     switch (_radioData.message) {
       case PACKET_INIT:
@@ -191,7 +204,7 @@ void processRadioData() {
         Sprintn(EXIO_PIN_START);
         Sprint(")");
 
-        if (radio.send(_radioData.fromRadioId, &_radioData, sizeof(_radioData))) {
+        if (radioSend(_radioData.fromRadioId, &_radioData)) {
           _radiosOnline[_radioData.data[0]] = 1;
           Sprintln("...done");
         } else
@@ -245,7 +258,7 @@ void processRadioData() {
           _radioData.message = PACKET_INIT;
         }
 
-        if (radio.send(_radioData.fromRadioId, &_radioData, sizeof(_radioData)))
+        if (radioSend(_radioData.fromRadioId, &_radioData))
           Sprintln("...done");
         else
           Sprintln("...failed");
@@ -276,33 +289,33 @@ void sendDigitalOutput(uint8_t offset, uint8_t state) {
   String msg;
 
   for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
-    if (vPinConfig[i].function != PINCONFIG_NOT_USED && vPinConfig[i].offset == offset) {
-      if (vPinConfig[i].function == PINCONFIG_DIGITAL_OUTPUT) {
+    if (_vPinConfig[i].function != PINCONFIG_NOT_USED && _vPinConfig[i].offset == offset) {
+      if (_vPinConfig[i].function == PINCONFIG_DIGITAL_OUTPUT) {
         found = 1;
 
         Sprint("S: radio ");
-        Sprintn(vPinConfig[i].radio);
+        Sprintn(_vPinConfig[i].radio);
         Sprint(", vpin ");
         Sprintn(offset + EXIO_PIN_START);
         Sprint(", state ");
         serialHighOrLow(state);
 
-        _radioData.fromRadioId = vPinConfig[i].radio;
+        _radioData.fromRadioId = _vPinConfig[i].radio;
         _radioData.message = PACKET_UPDATE_DIGITAL;
-        _radioData.data[0] = vPinConfig[i].index;
+        _radioData.data[0] = _vPinConfig[i].index;
         _radioData.data[1] = state;
 
-        if (radio.send(vPinConfig[i].radio, &_radioData, sizeof(_radioData)))
+        if (radioSend(_vPinConfig[i].radio, &_radioData))
           Sprintln("...done");
         else
           Sprintln("...failed");
       } else {
         Sprint("E: radio ");
-        Sprintn(vPinConfig[i].radio);
+        Sprintn(_vPinConfig[i].radio);
         Sprint(", vpin ");
         Sprintn(offset + EXIO_PIN_START);
         Sprint("...tried to set as digital OUT configured as ");
-        serialPinConfiguration(vPinConfig[i].function);
+        serialPinConfiguration(_vPinConfig[i].function);
         Sprintln(", ignored");
       }
     }
@@ -337,16 +350,16 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
   if (!duration) duration = 1;
 
   for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
-    if (vPinConfig[i].function != PINCONFIG_NOT_USED && vPinConfig[i].offset == offset) {
-      if (vPinConfig[i].function == PINCONFIG_PWM_LED_OUTPUT || vPinConfig[i].function == PINCONFIG_PWM_SERVO_OUTPUT) {
+    if (_vPinConfig[i].function != PINCONFIG_NOT_USED && _vPinConfig[i].offset == offset) {
+      if (_vPinConfig[i].function == PINCONFIG_PWM_LED_OUTPUT || _vPinConfig[i].function == PINCONFIG_PWM_SERVO_OUTPUT) {
         found = 1;
 
-        msg = "S: radio " + String(vPinConfig[i].radio) + ", vpin " + String(offset + EXIO_PIN_START);
+        msg = "S: radio " + String(_vPinConfig[i].radio) + ", vpin " + String(offset + EXIO_PIN_START);
 
-        if (vPinConfig[i].function == PINCONFIG_PWM_LED_OUTPUT) {
-          radioData.fromRadioId = vPinConfig[i].radio;
+        if (_vPinConfig[i].function == PINCONFIG_PWM_LED_OUTPUT) {
+          radioData.fromRadioId = _vPinConfig[i].radio;
           radioData.message = PACKET_UPDATE_ANALOG;
-          radioData.data[0] = vPinConfig[i].index;
+          radioData.data[0] = _vPinConfig[i].index;
           radioData.data[1] = value;
           radioData.data[2] = (duration * 100) / 32;
           radioData.data[3] = 0;
@@ -358,9 +371,9 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
           usDelayPrecise = ((SERVO_PWM_MAX_DURATION - SERVO_PWM_MIN_DURATION) / (float)180) * value;
           usDelay = (uint16_t)usDelayPrecise;
 
-          radioData.fromRadioId = vPinConfig[i].radio;
+          radioData.fromRadioId = _vPinConfig[i].radio;
           radioData.message = PACKET_UPDATE_ANALOG;
-          radioData.data[0] = vPinConfig[i].index;
+          radioData.data[0] = _vPinConfig[i].index;
           radioData.data[1] = lowByte(usDelay);
           radioData.data[2] = (duration * 100) / 32;
           radioData.data[3] = highByte(usDelay);
@@ -370,7 +383,7 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
 
         msg += ", duration " + String(duration * 100) + "ms" + msgCorrected + "...";
 
-        if (radio.send(vPinConfig[i].radio, &radioData, sizeof(radioData)))
+        if (radioSend(_vPinConfig[i].radio, &radioData))
 
           msg += "done";
 
@@ -380,11 +393,11 @@ void sendPWMOutput(uint8_t offset, uint8_t value, uint8_t duration) {
         Serial.println(msg);
       } else {
         Sprint("E: radio ");
-        Sprintn(vPinConfig[i].radio);
+        Sprintn(_vPinConfig[i].radio);
         Sprint(", vpin ");
         Sprintn(offset + EXIO_PIN_START);
         Sprint("...tried to set as PWM OUT configured as ");
-        serialPinConfiguration(vPinConfig[i].function);
+        serialPinConfiguration(_vPinConfig[i].function);
         Sprintln(", ignored");
       }
     }
@@ -466,7 +479,7 @@ uint8_t getRadioId(uint8_t current) {
 
 void initVPinConfig() {
   for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
-    vPinConfig[i].function = PINCONFIG_NOT_USED;
+    _vPinConfig[i].function = PINCONFIG_NOT_USED;
   }
 }
 
@@ -476,22 +489,22 @@ uint8_t newVPinConfig(uint8_t remoteIndex, uint8_t offset, uint8_t function, uin
   while (1) {
     if (i == EXIO_PIN_TABLE_SIZE) return 0;
 
-    if (vPinConfig[i].function == PINCONFIG_NOT_USED) break;
+    if (_vPinConfig[i].function == PINCONFIG_NOT_USED) break;
     i++;
   }
 
-  vPinConfig[i].index = remoteIndex;
-  vPinConfig[i].offset = offset;
-  vPinConfig[i].function = function;
-  vPinConfig[i].radio = radio;
+  _vPinConfig[i].index = remoteIndex;
+  _vPinConfig[i].offset = offset;
+  _vPinConfig[i].function = function;
+  _vPinConfig[i].radio = radio;
 
   return 1;
 }
 
 void clearRadioVPinConfig(uint8_t radio) {
   for (uint8_t i = 0; i < EXIO_PIN_TABLE_SIZE; i++) {
-    if (vPinConfig[i].radio == radio) {
-      vPinConfig[i].function = PINCONFIG_NOT_USED;
+    if (_vPinConfig[i].radio == radio) {
+      _vPinConfig[i].function = PINCONFIG_NOT_USED;
     }
   }
 }
