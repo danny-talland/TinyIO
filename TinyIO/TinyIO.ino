@@ -9,7 +9,7 @@ Input/output for DCC-EX
 #include <SPI.h>
 #include <NRFLite.h>
 #include <NmraDcc.h>
-#include <EEPROM.h>
+//#include <EEPROM.h>
 
 
 // Uncomment to ignore all serial comms
@@ -23,11 +23,11 @@ Input/output for DCC-EX
 // IO2 : Digital OUT
 // IO3 : Digital IN
 // IO4 : PWM SERVO
-#define TEST_MODE
+// #define TEST_MODE
 
 // Base address (0..255), the offset for the first input after a Factory Reset. The consecutive
 // pins are numbered +1. This offset is added to 'EXIO_PIN_START' in the EXTIO controller to calculate
-// the vpin number. 
+// the vpin number.
 // Note: 'EXIO_PIN_START' + 'EXIO_DIGITAL_PIN_COUNT' is the highest vpin number!
 // Note 2: if using DCC outputs all addresses from 0 to 255 will be valid.
 #define STD_VPIN_BASE 0
@@ -36,10 +36,12 @@ Input/output for DCC-EX
 #define STD_PIN_FUNCTION PINCONFIG_DIGITAL_INPUT
 
 // Tiny pins
-#define PIN_DCC 2
+
+#define PIN_DCC 8
 #define PIN_LED 3
 #define PIN_RADIO_CE 0
 #define PIN_RADIO_CSN 1
+
 
 // Test pins (UNO)
 /*
@@ -52,8 +54,9 @@ Input/output for DCC-EX
 #define MAXPINS 4
 
 // Mapping IO internal pin to hardware pin
-#define PIN_IO1 7
-#define PIN_IO2 8
+#define PIN_IO1 2
+//#define PIN_IO1 3
+#define PIN_IO2 7
 #define PIN_IO3 9
 #define PIN_IO4 10
 #define PIN_IO5 PINCONFIG_NOT_USED
@@ -120,6 +123,7 @@ Input/output for DCC-EX
 #define PACKET_UPDATE_DIGITAL 3
 #define PACKET_UPDATE_ANALOG 4
 #define PACKET_JUST_SAY_HI 99
+#define PACKET_CV 88
 
 // What to show in the serial monitor besides basic info
 #define SERIAL_SHOW_KEEPALIVE 0b00000001
@@ -188,7 +192,7 @@ struct Pin {
 CVPair FactoryDefaultCVs[] = {
   // These two CVs define the Long Accessory Address
   { CV_ACCESSORY_DECODER_ADDRESS_LSB, CV_DCC_ADDRESS_DEFAULT & 0xFF },
-  { CV_ACCESSORY_DECODER_ADDRESS_MSB, (CV_DCC_ADDRESS_DEFAULT >> 8) & 0x07 },
+  { CV_ACCESSORY_DECODER_ADDRESS_MSB, CV_DCC_ADDRESS_DEFAULT >> 8 },
 
   { CV_MULTIFUNCTION_EXTENDED_ADDRESS_MSB, 0 },
   { CV_MULTIFUNCTION_EXTENDED_ADDRESS_LSB, 0 },
@@ -298,29 +302,41 @@ void setup() {
   Sprint("Version: ");
   Sprintln(TIO_VER);
 
+  _radio.init(99, PIN_RADIO_CE, PIN_RADIO_CSN, NRFLite::BITRATE250KBPS, RADIO_CHAN);
+
   initDCC();
   setPinModes();
   initRadio();
   printSummary(0);
 }
 
+
+//void (*fnc[])(void) = {send, receive, pwm};
+uint8_t f = 0;
+
 void loop() {
   // Do all DCC stuff in library
   Dcc.process();
 
   // Send & receive data
-  if (!_DccOnlyMode && _radioReady) {
-    send();
-    receive();
-    pwm();
+  if (_radioReady) {
+    if (f == 0) send();
+    else if (f == 30) receive();
+    else if (f == 60) pwm();
+
+    // fnc[f]();
+    
   }
 
+  if (f == 90)
   sayHi();
 
-  if (_endBlink && millis() > _endBlink) {
+  if (f== 120 && _endBlink && millis() > _endBlink) {
     digitalWrite(PIN_LED, LOW);
     _endBlink = 0;
   }
+
+  ++f %= 150;
 }
 
 
@@ -397,9 +413,6 @@ void initDCC() {
   // Some settings can be put directly into the radioData
   _radioData.fromRadioId = Dcc.getCV(CV_RADIO_ID);
 
-Sprintln("RADIOID");
-  Sprintln(_radioData.fromRadioId);
-
 // What kind of info to print to the serial monitor
 #if not defined(_BE_TINY_)
   _serialOutput = Dcc.getCV(CV_SERIAL_OUTPUT);
@@ -409,6 +422,11 @@ Sprintln("RADIOID");
   for (uint8_t i = 0; i < MAXPINS; i++) {
     _pin[i].address = Dcc.getCV(CV_PIN_ADDRESS_BASE + i);
     _pin[i].function = Dcc.getCV(CV_PIN_FUNCTION_BASE + i);
+
+    _radioData.message = PACKET_CV;
+    _radioData.data[0] = CV_PIN_ADDRESS_BASE + i;
+    _radioData.data[1] = Dcc.getCV(CV_PIN_ADDRESS_BASE + i);
+    _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
   }
 }
 
@@ -419,6 +437,16 @@ void blink(uint16_t duration) {
 #endif
 }
 
+void configurePin(uint8_t index) {
+  if (_pin[index].pin != PINCONFIG_NOT_USED) {
+    pinMode(_pin[index].pin, (_pin[index].function == PINCONFIG_DIGITAL_INPUT) ? INPUT_PULLUP : OUTPUT);
+
+    // Controleer of het een DCC-uitgang is
+    if (_pin[index].function != PINCONFIG_DCC_OUTPUT)
+      _DccOnlyMode = 0;
+  }
+}
+
 void setPinModes() {
 #if defined(TEST_MODE)
   _pin[0].function = PINCONFIG_PWM_LED_OUTPUT;
@@ -426,21 +454,13 @@ void setPinModes() {
   _pin[3].function = PINCONFIG_PWM_SERVO_OUTPUT;
 #endif
 
-  _DccOnlyMode = 1;
+  _DccOnlyMode = 1;  // Standaard op alleen DCC
 
   for (uint8_t i = 0; i < MAXPINS; i++) {
-    if (_pin[i].pin != PINCONFIG_NOT_USED) {
-      pinMode(_pin[i].pin, OUTPUT);
-
-      if (_pin[i].function == PINCONFIG_DIGITAL_INPUT)
-        pinMode(_pin[i].pin, INPUT_PULLUP);
-
-      if (_pin[i].function != PINCONFIG_DCC_OUTPUT) {
-        _DccOnlyMode = 0;
-      }
-    }
+    configurePin(i);
   }
 }
+
 
 // Function only used on devices that support serial monitor, outputs a
 // summary of all relevant settings
@@ -815,6 +835,13 @@ void sayHi() {
 
 // Reset all CV's to factory default
 void resetCVFactoryDefault() {
+  _radioData.message = PACKET_CV;
+  _radioData.data[0] = 99;
+  _radioData.data[1] = 99;
+  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+
   uint8_t n = sizeof(FactoryDefaultCVs) / sizeof(CVPair);
   Sprintln("I: Factory reset!");
 
@@ -830,6 +857,25 @@ void resetCVFactoryDefault() {
 }
 
 void notifyCVChange(uint16_t CV, uint8_t Value) {
+  _radioData.message = PACKET_CV;
+  _radioData.data[0] = CV;
+  _radioData.data[1] = Value;
+  /*
+  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+
+  while (!Dcc.isSetCVReady())
+    ;
+  Dcc.setCV(CV, Value);
+
+  digitalWrite(PIN_LED, HIGH);
+  delay(2000);
+  digitalWrite(PIN_LED, LOW);
+*/
+  Value = Dcc.getCV(CV);
+  _radioData.data[1] = Value;
+  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+
+
   blink(1000);
 }
 
@@ -839,16 +885,14 @@ void notifyCVResetFactoryDefault() {
 }
 
 // Called from DCC library when a turnout is set
-void notifyDccAccTurnoutOutput(uint16_t address, uint8_t direction, uint8_t outputPower) {
-  // Ignore pulselength packet
-  if (!outputPower) return;
 
-  blink(250);
+void notifyDccAccTurnoutOutput(uint16_t address, uint8_t direction, uint8_t outputPower) {
+  // blink(250);
 
   // Check if the address matches our pins
   for (uint8_t i = 0; i < MAXPINS; i++) {
     if (_pin[i].function == PINCONFIG_DCC_OUTPUT && _pin[i].address == address) {
-      digitalWrite(_pin[i].pin, direction);
+      //digitalWrite(_pin[i].pin, direction);
 
 #if not defined(_BE_TINY_)
       if (_serialOutput & SERIAL_SHOW_DCC_OUTPUT) {

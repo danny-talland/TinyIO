@@ -70,7 +70,7 @@
 #define PACKET_UPDATE_DIGITAL 3
 #define PACKET_UPDATE_ANALOG 4
 #define PACKET_JUST_SAY_HI 99
-#define PACKET_ACK 222
+#define PACKET_CV 88
 
 // Servo PWM length (SG90)
 #define SERVO_PWM_MIN_DURATION 500
@@ -123,7 +123,7 @@ void setup() {
   Wire.onRequest(sendData);
 
   if (!_radio.init(RADIO_ID, RADIO_PIN_CE, RADIO_PIN_CSN, NRFLite::BITRATE250KBPS, RADIO_CHAN)) {
-    Sprintln("FATAL: Cannot communicate with _radio...");
+    Sprintln("FATAL: Cannot communicate with radio...");
     death();
   }
 
@@ -135,7 +135,7 @@ uint8_t step = 0;
 
 void loop() {
   processRadioData();
-
+/*
   if (_time + 15000 < millis()) {
     if (step) {
          sendPWMOutput(3, 40, 20);
@@ -158,12 +158,12 @@ sendDigitalOutput(1, LOW);
       delay(100);
       sendPWMOutput(0, 130, 3);
       delay(300);
-      */
+      *//*
     }
 
     _time = millis();
     step = !step;
-  }
+  } */
 }
 
 uint8_t radioSend(uint8_t toRadioId, void *data) {
@@ -216,7 +216,7 @@ void processRadioData() {
         Sprint("R: Radio ");
         Sprintn(_radioData.fromRadioId);
         Sprint(" config: services vpin ");
-        Sprintn(_radioData.data[0] + EXIO_PIN_START);
+        Sprintn(_radioData.data[1] + EXIO_PIN_START);
 
         if (_radioData.data[2] == PINCONFIG_DIGITAL_INPUT) Sprint(" as digital IN...");
         if (_radioData.data[2] == PINCONFIG_DIGITAL_OUTPUT) Sprint(" as digital OUT...");
@@ -229,6 +229,15 @@ void processRadioData() {
           Sprintln("not saved (pin config table full)");
         }
 
+        break;
+
+      case PACKET_CV:
+        Sprint("R: Radio ");
+        Sprintn(_radioData.fromRadioId);
+        Sprint(", CV ");
+        Sprintn(_radioData.data[0]);
+        Sprint(" set to ");
+        Sprintlnn(_radioData.data[1]);
         break;
 
       case PACKET_UPDATE_DIGITAL:
