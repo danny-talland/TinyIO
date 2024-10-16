@@ -141,7 +141,7 @@ Input/output for DCC-EX
 #define RADIO_EXTIO_ID 0
 
 // Keep alive messages
-#define KEEPALIVE_COUNT 300000
+#define KEEPALIVE_COUNT 2500
 
 // CV indexes and default values
 #define CV_DCC_ADDRESS_DEFAULT 9
@@ -278,6 +278,7 @@ uint8_t _serialOutput;
 uint8_t _hiCount;
 uint8_t _DccOnlyMode;
 uint8_t _radioReady;
+uint8_t _fCount = 0;
 
 uint16_t _offsetVPin;
 
@@ -311,32 +312,26 @@ void setup() {
 }
 
 
-//void (*fnc[])(void) = {send, receive, pwm};
-uint8_t f = 0;
-
 void loop() {
   // Do all DCC stuff in library
   Dcc.process();
 
   // Send & receive data
   if (_radioReady) {
-    if (f == 0) send();
-    else if (f == 30) receive();
-    else if (f == 60) pwm();
-
-    // fnc[f]();
-    
+    if (_fCount == 0) send();
+    else if (_fCount == 20) receive();
+    pwm();
   }
 
-  if (f == 90)
-  sayHi();
+  if (_fCount == 40)
+    sayHi();
 
-  if (f== 120 && _endBlink && millis() > _endBlink) {
+  if (_fCount == 60 && _endBlink && millis() > _endBlink) {
     digitalWrite(PIN_LED, LOW);
     _endBlink = 0;
   }
 
-  ++f %= 150;
+  ++_fCount %= 80;
 }
 
 
@@ -798,7 +793,7 @@ void sayHi() {
 
   _lastSendCount = 0;
 
-  blink(100);
+  blink(50);
 
   if (!_radioReady) {
     initRadio();
@@ -835,12 +830,12 @@ void sayHi() {
 
 // Reset all CV's to factory default
 void resetCVFactoryDefault() {
+  /*
   _radioData.message = PACKET_CV;
   _radioData.data[0] = 99;
   _radioData.data[1] = 99;
   _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
-  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
-  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
+  */
 
   uint8_t n = sizeof(FactoryDefaultCVs) / sizeof(CVPair);
   Sprintln("I: Factory reset!");
@@ -857,24 +852,12 @@ void resetCVFactoryDefault() {
 }
 
 void notifyCVChange(uint16_t CV, uint8_t Value) {
+  //Value = Dcc.getCV(CV);
+
   _radioData.message = PACKET_CV;
   _radioData.data[0] = CV;
   _radioData.data[1] = Value;
-  /*
   _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
-
-  while (!Dcc.isSetCVReady())
-    ;
-  Dcc.setCV(CV, Value);
-
-  digitalWrite(PIN_LED, HIGH);
-  delay(2000);
-  digitalWrite(PIN_LED, LOW);
-*/
-  Value = Dcc.getCV(CV);
-  _radioData.data[1] = Value;
-  _radio.send(RADIO_EXTIO_ID, &_radioData, sizeof(_radioData));
-
 
   blink(1000);
 }
@@ -892,7 +875,7 @@ void notifyDccAccTurnoutOutput(uint16_t address, uint8_t direction, uint8_t outp
   // Check if the address matches our pins
   for (uint8_t i = 0; i < MAXPINS; i++) {
     if (_pin[i].function == PINCONFIG_DCC_OUTPUT && _pin[i].address == address) {
-      //digitalWrite(_pin[i].pin, direction);
+      digitalWrite(_pin[i].pin, direction);
 
 #if not defined(_BE_TINY_)
       if (_serialOutput & SERIAL_SHOW_DCC_OUTPUT) {
